@@ -1,0 +1,10 @@
+requests
+beautifulsoup4
+pyTelegramBotAPI
+apscheduler
+streamlit
+plotly
+torch
+pandas
+numpy
+scikit-learn
