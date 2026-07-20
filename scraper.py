@@ -10,9 +10,9 @@ import requests
 from bs4 import BeautifulSoup
 
 # ============================================================
-# CONFIGURE THIS — paste the Flipkart product URL you want to track
+# NOTE: Product URLs are now configured in config.json
+# The get_price() function accepts a URL parameter
 # ============================================================
-PRODUCT_URL = "https://www.flipkart.com/apple-iphone-15-blue-128-gb/p/itmbf14ef54f645d"
 
 # Full Chrome User-Agent to reduce chance of being blocked
 HEADERS = {
@@ -29,12 +29,16 @@ MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 5
 
 
-def get_price(url: str = PRODUCT_URL):
+def get_price(url: str):
     """
     Scrape the product price from the given Flipkart URL.
     Retries up to 3 times with a 5-second delay if the request fails.
     Returns an integer price, or None if the price cannot be found.
     """
+    if not url:
+        print("[scraper] No URL provided.")
+        return None
+
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             print(f"[scraper] Attempt {attempt}/{MAX_RETRIES} — fetching price...")
@@ -72,8 +76,9 @@ def get_price(url: str = PRODUCT_URL):
 
 
 if __name__ == "__main__":
-    # Standalone test
-    result = get_price()
+    # Standalone test — requires a URL
+    test_url = "https://www.flipkart.com/apple-iphone-15-blue-128-gb/p/itmbf14ef54f645d"
+    result = get_price(test_url)
     if result is not None:
         print(f"Scraped price: Rs.{result}")
     else:

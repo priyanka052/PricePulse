@@ -3,18 +3,17 @@ dashboard.py — Streamlit UI for PricePulse.
 Shows price stats, history chart, LSTM forecast, and buy/wait recommendation.
 """
 
+import sqlite3
 import time
 from datetime import datetime, timedelta
 
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from database import get_all_prices, init_db
+from database import DB_PATH, get_all_prices, get_price_stats, init_db
 from model import predict_next_7_days
-
-# Phone product — ignore junk/test scrapes below this floor
-MIN_VALID_PRICE = 5000
 
 
 def _recommendation(current: float, forecast: list) -> str:
@@ -33,23 +32,12 @@ def _recommendation(current: float, forecast: list) -> str:
     return "Buy Now — price unlikely to drop further based on forecast."
 
 
-def _compute_stats(df: pd.DataFrame) -> dict:
-    """Compute current / highest / lowest / previous from filtered price rows."""
-    if df.empty:
-        return {"highest": None, "lowest": None, "current": None, "previous": None}
-
-    prices = df["price"].tolist()
-    return {
-        "highest": int(max(prices)),
-        "lowest": int(min(prices)),
-        "current": int(prices[-1]),
-        "previous": int(prices[-2]) if len(prices) >= 2 else None,
-    }
-
-
 def main():
     """Render the PricePulse Streamlit dashboard."""
     st.set_page_config(page_title="PricePulse", layout="wide")
+
+    # Ensure the DB + table exist before we try to read from it in the sidebar.
+    init_db()
 
     # ---- Sidebar ----
     with st.sidebar:
@@ -59,56 +47,69 @@ def main():
             "Track live prices, history, and LSTM predictions."
         )
         st.divider()
+        
+        # Product selector
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            products = [row[0] for row in conn.execute("SELECT DISTINCT product_name FROM prices").fetchall()]
+        finally:
+            conn.close()
+
+        if products:
+            selected_product = st.selectbox("Select Product", products)
+        else:
+            st.warning("No products found in prices.db")
+            selected_product = None
+        
+        st.divider()
         st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         if st.button("Refresh", use_container_width=True):
             st.rerun()
 
     st.title("PricePulse")
     st.caption("Autonomous e-commerce price monitoring & forecast")
+    
+    if not selected_product:
+        st.warning("Please select a product from the sidebar.")
+        return
+    
+    st.info(f"📦 Monitoring: **{selected_product}**")
 
     try:
-        init_db()
-        rows = get_all_prices()
-
-        if rows:
-            df = pd.DataFrame(rows, columns=["time", "price"])
+        # Fetch all prices for the selected product (history chart).
+        rows = get_all_prices(selected_product)
+        df = pd.DataFrame(rows, columns=["time", "product_name", "price"])
+        if not df.empty:
             df["time"] = pd.to_datetime(df["time"], format="mixed")
-            # Drop junk test prices (e.g. Rs.960) — real phone prices are >= Rs.5000
-            df = df[df["price"] >= MIN_VALID_PRICE].reset_index(drop=True)
-        else:
-            df = pd.DataFrame(columns=["time", "price"])
 
-        stats = _compute_stats(df)
-        current = stats.get("current")
-        previous = stats.get("previous")
-        highest = stats.get("highest")
-        lowest = stats.get("lowest")
-
-        delta_value = None
-        if current is not None and previous is not None:
-            delta_value = current - previous
+        # Fetch summary stats for the selected product (metric cards).
+        stats = get_price_stats(selected_product)
+        current = stats.get("current") if stats else None
+        highest = stats.get("highest") if stats else None
+        lowest = stats.get("lowest") if stats else None
 
         # ---- Stat cards ----
         col1, col2, col3 = st.columns(3)
         with col1:
             with st.container(border=True):
+                current_display = f"Rs.{current:,}" if current is not None else "No data yet"
                 st.metric(
                     "Current Price",
-                    f"Rs.{current:,}" if current is not None else "—",
-                    delta=f"Rs.{delta_value:,}" if delta_value is not None else None,
-                    delta_color="inverse",  # drop = green, rise = red
+                    current_display,
                 )
         with col2:
             with st.container(border=True):
+                highest_display = f"Rs.{highest:,}" if highest is not None else "No data yet"
                 st.metric(
                     "Highest Price",
-                    f"Rs.{highest:,}" if highest is not None else "—",
+                    highest_display,
                 )
         with col3:
             with st.container(border=True):
+                lowest_display = f"Rs.{lowest:,}" if lowest is not None else "No data yet"
                 st.metric(
                     "Lowest Price",
-                    f"Rs.{lowest:,}" if lowest is not None else "—",
+                    lowest_display,
                 )
 
         st.divider()
@@ -135,43 +136,7 @@ def main():
         # ---- Price history chart ----
         st.subheader("Price History")
         if not df.empty:
-            fig = go.Figure()
-            fig.add_trace(
-                go.Scatter(
-                    x=df["time"],
-                    y=df["price"],
-                    mode="lines+markers",
-                    name="Observed",
-                    line=dict(color="#1a1a1a", width=2),
-                    marker=dict(size=7, color="#1a1a1a"),
-                    fill="tozeroy",
-                    fillcolor="rgba(26, 26, 26, 0.12)",
-                    hovertemplate=(
-                        "Price: Rs.%{y:,.0f}<br>"
-                        "Time: %{x|%Y-%m-%d %H:%M:%S}"
-                        "<extra></extra>"
-                    ),
-                )
-            )
-            fig.update_layout(
-                hovermode="closest",
-                margin=dict(l=20, r=20, t=30, b=20),
-                height=400,
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-                xaxis=dict(
-                    title="Timestamp",
-                    showgrid=True,
-                    gridcolor="#e0e0e0",
-                    zeroline=False,
-                ),
-                yaxis=dict(
-                    title="Price (Rs.)",
-                    showgrid=True,
-                    gridcolor="#e0e0e0",
-                    zeroline=False,
-                ),
-            )
+            fig = px.line(df, x="time", y="price", markers=True)
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info(
